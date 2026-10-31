@@ -1,0 +1,57 @@
+#!/usr/bin/env python3
+# =====================================================================================
+# 1-D LOCALIZATION EXTENDED KALMAN FILTER
+# =====================================================================================
+import numpy as np
+from numpy import arctan2, radians, degrees, sqrt
+np.set_printoptions(precision=6, suppress=True)
+def cov(stds, rho=None):
+    s = np.asarray(stds, float); R = np.eye(len(s)) if rho is None else np.array([[1, rho], [rho, 1]])
+    return np.outer(s, s) * R
+
+# =========================================
+dt  = 1.0                       # time step (s)                      e.g. "sample rate 10 Hz" -> 0.1
+x0  = [1.0, 1.0]                # prior [position x (m), velocity v (m/s)]
+P0  = cov([0.5, 0.2])           # prior stds of x and v (add a correlation: cov([sx, sv], rho)); known x -> std 0
+u   = [0.0]                     # acceleration input a (m/s^2) (0 if "constant velocity")
+Su  = cov([0.1])                # std of the acceleration input
+h   = 3.0                       # ceiling height above the sensor (m)
+xL  = 5.0                       # horizontal position of the ceiling point (m)
+z   = [radians(40)]             # measured elevation angle (RADIANS)
+Sz  = cov([radians(2)])         # std of the angle measurement (radians)
+# ===================================================================================
+
+x = np.array(x0, float); P = np.array(P0, float); u = np.array(u, float); z = np.array(z, float)
+print("MODEL")
+print("  state x = [x, v]^T, input u = [a], measurement z = [phi]")
+print("  motion (linear):       x' = x + v dt + 0.5 a dt^2,   v' = v + a dt")
+print("  measurement (nonlinear): phi = h(x) = atan2(h, xL - x)")
+print("  Jacobian: d(phi)/dx = h / ((xL - x)^2 + h^2),  d(phi)/dv = 0  ->  H = [h/((xL-x)^2+h^2), 0]")
+
+# ---- PREDICTION (the motion is linear: G = A, V = B) ----
+A = np.array([[1, dt], [0, 1]]); B = np.array([[0.5*dt**2], [dt]])
+xb = A @ x + B @ u
+Pb = A @ P @ A.T + B @ Su @ B.T
+print("\nPREDICTION  x_bar = A x + B u,  Sigma_bar = A Sigma A^T + B Sigma_u B^T")
+print("  A =\n", A, "\n  B =\n", B)
+print("  x_bar =", xb); print("  Sigma_bar =\n", Pb)
+
+# ---- UPDATE (EKF: linearize h at the predicted position) ----
+d = xL - xb[0]
+zh = np.array([arctan2(h, d)])
+H = np.array([[h/(d**2 + h**2), 0.0]])
+print(f"\nUPDATE (linearized at x_bar = {xb[0]:.6g})")
+print(f"  horizontal distance d = xL - x_bar = {xL} - {xb[0]:.6g} = {d:.6g}")
+print(f"  predicted angle z_hat = atan2({h}, {d:.6g}) = {zh[0]:.6g} rad = {degrees(zh[0]):.6g} deg")
+print(f"  H = [ {h}/({d:.6g}^2 + {h}^2), 0 ] = {H}")
+S = H @ Pb @ H.T + Sz
+K = Pb @ H.T @ np.linalg.inv(S)
+y = z - zh; y = (y + np.pi) % (2*np.pi) - np.pi          # angle innovation, wrapped
+xp = xb + K @ y
+Pp = (np.eye(2) - K @ H) @ Pb
+print("  S = H Sigma_bar H^T + Sigma_z =", S)
+print("  KALMAN GAIN  K = Sigma_bar H^T S^-1 =\n", K)
+print(f"  innovation z - z_hat = {degrees(z[0]):.6g} - {degrees(zh[0]):.6g} deg = {y[0]:.6g} rad")
+print("  x+ = x_bar + K (z - z_hat) =", xp)
+print("  Sigma+ = (I - K H) Sigma_bar =\n", Pp)
+print("  std+ =", np.sqrt(np.diag(Pp)), "  correlation rho+ =", Pp[0, 1]/np.sqrt(Pp[0, 0]*Pp[1, 1]))
