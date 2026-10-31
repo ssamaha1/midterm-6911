@@ -1,0 +1,71 @@
+
+#!/usr/bin/env python3
+# Unscented transform of a one-dimensional state
+
+import numpy as np
+from math import erf
+from numpy import sin, cos, tan, sqrt, exp, log, arctan2, arcsin, arccos, pi, radians, degrees
+np.set_printoptions(precision=6, suppress=True, linewidth=120)
+
+class _Blank:
+    def __iter__(self): raise SystemExit("A line with several names (a, b = ___) is still blank: fill in every ___ first.")
+    def __array__(self, *a, **k): raise SystemExit("A model function still returns ___: fill in its return line first.")
+    def __bool__(self): return False
+
+___ = _Blank()
+rpm = 2*pi/60
+
+def need(**kw):
+    miss = [k for k, v in kw.items() if v is None]
+    if miss: raise SystemExit("Fill in these blanks first: " + ", ".join(miss))
+
+def cov(stds, rho=None):
+    """Covariance from standard deviations; rho = one correlation (2 values) or a full correlation matrix."""
+    s = np.asarray(stds, float); Rm = np.eye(len(s)) if rho is None else (np.array([[1, rho], [rho, 1]]) if np.isscalar(rho) else np.asarray(rho, float))
+    return np.outer(s, s) * Rm
+
+def wrap(a): return (np.asarray(a) + pi) % (2*pi) - pi
+
+# ===================== FILL IN FROM THE PROBLEM =====================
+EXAMPLE_VALUES = False
+
+#predicted state mean
+MU = [0.1]
+
+#predicted state standard deviation
+# variance = 0.04, so std = sqrt(0.04) = 0.2
+STDS = [0.2]
+
+#UT parameters
+# alpha = 10^(-1) = 0.1, kappa = 0, beta = 2
+# lambda = alpha^2 * (n + kappa) - n
+# lambda = 0.1^2 * (1 + 0) - 1 = -0.99
+LAMBDA, KAPPA, BETA = -0.99, 0, 2
+
+#measurement function
+# =====================================================================
+
+globals().update({k: None for k, v in list(globals().items()) if v is ___})
+
+if EXAMPLE_VALUES: print("NOTE: these are the EXAMPLE values of the template, not your problem (set EXAMPLE_VALUES = False after replacing them).\n")
+
+need(MU=MU, STDS=STDS, LAMBDA=LAMBDA)
+
+mu = np.array(MU, float); n = mu.size; P = np.diag(np.square(STDS)); lam = LAMBDA
+alpha2 = (lam + n)/(n + KAPPA); print(f"n = {n}, lambda = {lam}, alpha = {np.sqrt(alpha2):.6g}")
+
+Lc = np.linalg.cholesky((n + lam)*P); X = [mu] + [mu + Lc[:, i] for i in range(n)] + [mu - Lc[:, i] for i in range(n)]
+
+wm = np.full(2*n + 1, 1/(2*(n + lam))); wm[0] = lam/(n + lam); wc = wm.copy(); wc[0] = wm[0] + (1 - alpha2 + BETA)
+
+f = lambda p: np.array([np.sign(p[0])*p[0]**2])
+
+Y = np.array([f(x) for x in X])
+
+for i, (x, y) in enumerate(zip(X, Y)): print(f"X{i} = {x}  ->  Y{i} = {y}")
+
+print("w_m =", wm, "\nw_c =", wc)
+
+ym = wm @ Y; D = Y - ym; Py = (wc[:, None]*D).T @ D
+
+print("mean =", ym, "\ncov =\n", Py)
