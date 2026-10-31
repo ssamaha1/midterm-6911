@@ -1,0 +1,95 @@
+#!/usr/bin/env python3
+import numpy as np
+from numpy import cos, sin, arctan2, sqrt, degrees
+
+# ===================== VALUES =====================
+dt = 10                          # t0 = 0 -> t1 = 10 s
+p0, v0 = 0.0, 100/3.6            # at the origin (believed with probability 1), 100 km/h = 27.7778 m/s
+sp0, sv0 = 0.0, 5/3.6            # position known exactly -> std 0; speed std 5 km/h = 1.38889 m/s
+rho0 = 0.3                       # correlation coefficient 0.3 (prior p-v; with sp0 = 0 it has no effect)
+a, sa = 2.42, 0.1                # accelerometer input and its std
+z = np.array([346.0, 200.0])     # GPS x, y
+psi = arctan2(200, 346)          # ASSUMPTION: road direction = direction of the GPS fix (about 30 deg)
+s_gps, rho_gps = 5.0, 0.3        # ASSUMPTION: GPS std (not given: put the real one) ; GPS x-y correlation 0.3
+# =======================================================
+
+f = lambda v: f"{v:.6g}"
+def mat(name, M, ind="  "):
+    M = np.atleast_2d(M); cells = [[f(v) for v in r] for r in M]; w = max(len(c) for r in cells for c in r) + 1; lab = ind + name + " = "
+    return "\n".join((lab if i == 0 else " " * len(lab)) + "[ " + " ".join(c.rjust(w) for c in r) + " ]" for i, r in enumerate(cells))
+A = np.array([[1, dt], [0, 1]]); B = np.array([[0.5*dt**2], [dt]]); C = np.array([[cos(psi), 0], [sin(psi), 0]])
+x = np.array([p0, v0]); P = np.array([[sp0**2, rho0*sp0*sv0], [rho0*sp0*sv0, sv0**2]]); Su = np.array([[sa**2]])
+Sz = np.array([[s_gps**2, rho_gps*s_gps**2], [rho_gps*s_gps**2, s_gps**2]])
+L = []; p = L.append
+p("THE DESIGN (write these in order)\n")
+p("""  ┌ PROOF · How to design a filter (the 8 decisions)
+  │ 1. STATE: what is asked + everything whose rate appears in the physics (position needs velocity if acceleration is the input) + unknown constants you must estimate (bias, parameter).
+  │ 2. INPUT: what is commanded or measured as a RATE (accelerometer, gyro, wheel speed). Its noise enters through B (or V): B Σ_u Bᵀ.
+  │ 3. MEASUREMENT: every sensor that reads a function of the state: z = h(x) + v.
+  │ 4. MOTION MODEL: physics in continuous time, then discretize (Euler x′ = x + Δt ẋ, or exact e^{AΔt}).
+  │ 5. MEASUREMENT MODEL: one line per sensor; frames, offsets and units included.
+  │ 6. LINEAR? If all Jacobian entries are constants ⇒ KF. Otherwise EKF (Jacobians G, V, H) or UKF; multimodal ⇒ particle / histogram filter.
+  │ 7. NOISE: Σ_u from the input sensors, Σ_z from the other sensors (diagonal if independent, ρσσ off-diagonal if correlated), Q for unmodelled effects, Σ_0 from the prior.
+  │ 8. CHECK: dimensions (A n×n, B n×m, C k×n), observability, angle wrapping, units.      QED
+  └ (end of proof)
+""")
+p("1. STATE  x = [p, v]ᵀ   (n = 2)      p = distance travelled along the road from the origin, v = speed")
+p("2. INPUT  u = [a]ᵀ   (m = 1)         accelerometer (a rate sensor ⇒ input)")
+p("3. MEASUREMENT  z = [x_gps, y_gps]ᵀ   (k = 2)")
+p("4. MOTION MODEL  x′ = g(x, u):\n   p′ = p + v·dt + 0.5·a·dt^2\n   v′ = v + a·dt")
+p(f"5. MEASUREMENT MODEL  z = h(x) + noise:   (road through the origin at heading ψ = {f(degrees(psi))}°)\n   x_gps = p·cos(ψ)\n   y_gps = p·sin(ψ)\n   constants: dt = {f(dt)}, ψ = {f(psi)} rad\n")
+p("6. JACOBIANS (each entry = derivative of that row’s formula with respect to that column’s variable)")
+p("G = ∂/∂(p, v):\n   row p′: [ 1 , dt ]\n   row v′: [ 0 , 1  ]\nV (= B) = ∂/∂(a):\n   row p′: [ 0.5·dt^2 ]\n   row v′: [ dt       ]\nH (= C) = ∂/∂(p, v):\n   row x_gps: [ cos(ψ) , 0 ]\n   row y_gps: [ sin(ψ) , 0 ]\n")
+p("7. LINEAR OR NOT?\n   G: constant ⇒ motion is linear in the state\n   V: constant ⇒ motion is linear in the input\n   H: constant ⇒ measurement is linear\n   ⇒ FILTER: linear Kalman filter (A = G, B = V, C = H are constant matrices, the KF is exact)\n")
+p("8. NUMBERS"); p(mat("G", A, "   ")); p(mat("V", B, "   ")); p(mat("H", C, "   ")); p("")
+p("""  ┌ PROOF · Observability: which states can the sensors determine?
+  │ x′ = A x, z = C x ⇒ [z_0; z_1] = 𝒪 x_0 with 𝒪 = [C; CA]. x_0 is recoverable iff 𝒪 has full column rank n.      QED
+  └ (end of proof)""")
+O = np.vstack([C, C @ A]); p(f"\n9. OBSERVABILITY  𝒪 = [H; HG] (4×2), rank = {np.linalg.matrix_rank(O)} of 2\n   full rank ⇒ every state can be estimated from the measurements over time ✓\n")
+p("10. NOISE MATRICES (structure)\n   Σ_u = diag(σ_a²)   input-sensor noise; enters as V Σ_u Vᵀ\n   Σ_z = [[σ², ρσ²], [ρσ², σ²]]   GPS x and y correlated (ρ = 0.3)\n   Σ₀ = diag(0, σ_v²): position known with probability 1\n")
+p("11. ALGORITHM (KF)\n   x̄ = A μ + B u;  Σbar = A Σ Aᵀ + B Σ_u Bᵀ\n   K = Σbar Cᵀ (C Σbar Cᵀ + Σ_z)⁻¹;  μ = x̄ + K (z − C x̄);  Σ = (I − K C) Σbar\n")
+p("12. CODE: paste this over the “FILL IN FROM THE EXAM” block of exam_kf.py")
+p(f"""# =================== =====================
+# state x = [p, v], input u = [a], measurement z = [x_gps, y_gps]
+dt = {f(dt)}
+x0 = [{f(p0)}, {f(v0)}]                       # origin, 100 km/h
+P0 = np.array([[{f(P[0,0])}, {f(P[0,1])}], [{f(P[1,0])}, {f(P[1,1])}]])   # position exact; speed std 5 km/h
+A = [[1, {f(dt)}],
+     [0, 1]]
+B = [[{f(0.5*dt**2)}],
+     [{f(dt)}]]
+c = None; Q = None
+C = [[{f(cos(psi))}, 0],
+     [{f(sin(psi))}, 0]]
+D = None; d = None
+STEPS = [ ([{f(a)}], np.diag(np.array([{f(sa)}])**2),
+           [{f(z[0])}, {f(z[1])}], np.array([[{f(Sz[0,0])}, {f(Sz[0,1])}], [{f(Sz[1,0])}, {f(Sz[1,1])}]])) ]
+# ================================================================
+""")
+p("13. ONE FILTER STEP WITH YOUR NUMBERS\nSETUP\nMy system state is  x = [p, v]ᵀ        → Σ is 2×2\nMy input is         u = [a]ᵀ           → Σ_u is 1×1\nMy measurement is   z = [x_gps, y_gps]ᵀ → Σ_z is 2×2\n\nFILTER CHOICE: all Jacobians constant ⇒ Kalman filter.\n")
+p("NUMBERS (converted to SI)"); p(f"  x  = [{f(x[0])}, {f(x[1])}]"); p(mat("Σ_x", P)); p(f"  u  = [{f(a)}]"); p(mat("Σ_u", Su)); p(f"  z  = [{f(z[0])}, {f(z[1])}]"); p(mat("Σ_z", Sz))
+xb = A @ x + B[:, 0]*a
+p(f"\nSTEP · predicted mean  x̄ = A x + B u\n  p' = p + v·dt + 0.5·a·dt^2 = {f(x[0])} + {f(x[1])}·{f(dt)} + 0.5·{f(a)}·{f(dt)}^2 = {f(xb[0])}\n  v' = v + a·dt = {f(x[1])} + {f(a)}·{f(dt)} = {f(xb[1])}")
+AP = A @ P; APA = AP @ A.T; BS = B @ Su; BSB = BS @ B.T; Pb = APA + BSB
+p("\nSTEP · predicted covariance  Σbar = A Σ Aᵀ + B Σ_u Bᵀ\nAΣAᵀ in two steps:"); p(mat("AΣ", AP, "")); p(mat("AΣAᵀ", APA, "")); p("BΣ_uBᵀ in two steps:"); p(mat("BΣ_u", BS, "")); p(mat("BΣ_uBᵀ", BSB, "")); p(mat("Σbar", Pb, ""))
+zh = C @ xb; p(f"\nSTEP · predicted measurement  ẑ = C x̄\n  x_gps = p̄·cos(ψ) = {f(xb[0])}·{f(cos(psi))} = {f(zh[0])}\n  y_gps = p̄·sin(ψ) = {f(xb[0])}·{f(sin(psi))} = {f(zh[1])}")
+p("""
+  ┌ PROOF · Kalman update: K = ΣbarCᵀ(CΣbarCᵀ + Σ_z)⁻¹,  x⁺ = x̄ + K(z − Cx̄),  Σ⁺ = (I − KC)Σbar
+  │ Prior x ~ N(x̄, Σbar); z = Cx + δ, δ ~ N(0, Σ_z). Bayes: p(x | z) ∝ exp(−J), J = ½(z − Cx)ᵀΣ_z⁻¹(z − Cx) + ½(x − x̄)ᵀΣbar⁻¹(x − x̄).
+  │ Hessian: Σ⁺ = (CᵀΣ_z⁻¹C + Σbar⁻¹)⁻¹. Gradient zero: x⁺ = x̄ + Σ⁺CᵀΣ_z⁻¹(z − Cx̄), and Σ⁺CᵀΣ_z⁻¹ = ΣbarCᵀ(CΣbarCᵀ + Σ_z)⁻¹ = K;
+  │ (I − KC)Σbar = Σ⁺.      QED
+  └ (end of proof)""")
+CPC = C @ Pb @ C.T; S = CPC + Sz; det = S[0,0]*S[1,1] - S[0,1]*S[1,0]; Si = np.array([[S[1,1], -S[0,1]], [-S[1,0], S[0,0]]])/det
+p("\nSTEP · innovation covariance  S = C Σbar Cᵀ + Σ_z"); p(mat("C Σbar Cᵀ", CPC, "")); p(mat("S", S, ""))
+p(f"det S = {f(S[0,0])}·{f(S[1,1])} − {f(S[0,1])}·{f(S[1,0])} = {f(det)}\nS⁻¹ = (1/det)·[[d, −b], [−c, a]] ="); p(mat("S⁻¹", Si, ""))
+PCt = Pb @ C.T; K = PCt @ Si; p("\nSTEP · Kalman gain  K = Σbar Cᵀ S⁻¹"); p(mat("Σbar Cᵀ", PCt, "")); p(mat("K", K, ""))
+y = z - zh; p(f"\nSTEP · innovation  z − ẑ\n  {f(z[0])} − {f(zh[0])} = {f(y[0])}\n  {f(z[1])} − {f(zh[1])} = {f(y[1])}")
+Ky = K @ y; xp = xb + Ky; p("\nSTEP · posterior mean  x⁺ = x̄ + K (z − ẑ)")
+for i, nm in enumerate(["p", "v"]): p(f"  {nm}: {f(xb[i])} + ({f(K[i,0])}·{f(y[0])} + {f(K[i,1])}·{f(y[1])}) = {f(xb[i])} + {f(Ky[i])} = {f(xp[i])}")
+Pp = (np.eye(2) - K @ C) @ Pb; p("\nSTEP · posterior covariance  Σ⁺ = (I − K C) Σbar"); p(mat("Σ⁺", Pp, ""))
+p(f"  σ⁺ = √diag(Σ⁺) = [{f(sqrt(Pp[0,0]))}, {f(sqrt(Pp[1,1]))}]   (prior σ [{f(sp0)}, {f(sv0)}], predicted σ [{f(sqrt(Pb[0,0]))}, {f(sqrt(Pb[1,1]))}])")
+p(f"  position in the plane: x = p⁺·cos(ψ) = {f(xp[0]*cos(psi))} m, y = p⁺·sin(ψ) = {f(xp[0]*sin(psi))} m")
+p("\nFINAL ANSWER"); p(f"  x̄ = [{f(xb[0])}, {f(xb[1])}]"); p(mat("Σbar", Pb)); p(mat("K", K)); p(f"  x⁺ = [{f(xp[0])}, {f(xp[1])}]"); p(mat("Σ⁺", Pp))
+p("CHECK: the variances on the diagonal of Σ⁺ are smaller than those of Σbar, and p moved towards what the GPS reported.")
+p("NOTE: pole 4 (1.2 m, std 0.2 m) is not included: send what it measures to add it as a third measurement row.")
+out = "\n".join(L); print(out); open("car_solution.txt", "w").write(out)
