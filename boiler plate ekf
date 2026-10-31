@@ -93,3 +93,17 @@ p("\nFINAL ANSWER"); p(f"  x̄ = [{f(xb[0])}, {f(xb[1])}]"); p(mat("Σbar", Pb))
 p("CHECK: the variances on the diagonal of Σ⁺ are smaller than those of Σbar, and p moved towards what the GPS reported.")
 p("NOTE: pole 4 (1.2 m, std 0.2 m) is not included: send what it measures to add it as a third measurement row.")
 out = "\n".join(L); print(out); open("car_solution.txt", "w").write(out)
+
+
+# ---- covariance and correlation coefficient ----
+def corr(P): return P[0, 1] / np.sqrt(P[0, 0] * P[1, 1])        # rho = cov(p, v) / (sigma_p * sigma_v)
+print("predicted covariance Sigma_bar =\n", Pb, "\npredicted correlation rho_bar =", corr(Pb))
+print("posterior covariance Sigma+ =\n", Pp, "\nposterior correlation rho+ =", corr(Pp))
+
+# ---- position estimate and its uncertainty ----
+sp, sv = np.sqrt(Pp[0, 0]), np.sqrt(Pp[1, 1])
+print(f"position estimate p = {xp[0]:.4f} m, variance {Pp[0,0]:.5f} m^2, std {sp:.4f} m")
+print(f"  95% interval: {xp[0]-1.96*sp:.3f} to {xp[0]+1.96*sp:.3f} m")
+print(f"velocity estimate v = {xp[1]:.4f} m/s, variance {Pp[1,1]:.5f}, std {sv:.4f} m/s")
+print(f"covariance between them cov(p, v) = {Pp[0,1]:.5f}")
+
